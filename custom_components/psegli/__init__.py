@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD
 from .psegli import InvalidAuth, PSEGLIClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,11 +26,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up PSEG Long Island from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     
-    # Get cookie from secrets
-    cookie = entry.data.get("cookie")
-    if not cookie:
-        _LOGGER.error("No cookie provided")
+    # Get credentials from config entry
+    username = entry.data.get(CONF_USERNAME)
+    password = entry.data.get(CONF_PASSWORD)
+    
+    if not username or not password:
+        _LOGGER.error("No username/password provided")
         return False
+    
+    # Try to get fresh cookies using automated login
+    try:
+        from .auto_login import get_fresh_cookies
+        cookies = await get_fresh_cookies(username, password)
+        
+        if not cookies:
+            _LOGGER.error("Failed to get cookies from automation addon")
+            return False
+        
+        # Convert cookies to cookie string
+        cookie_string = "; ".join([f"{name}={value}" for name, value in cookies.items()])
+        _LOGGER.info("Obtained fresh cookies, length: %d", len(cookie_string))
+        
+        # Store cookie in config entry for future use
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, "cookie": cookie_string},
+        )
+        
+    except Exception as e:
+        _LOGGER.error("Failed to get cookies: %s", e)
+        return False
+    
+    # Use the cookies we just obtained, not from the config entry
+    cookie = cookie_string
     
     # Create client
     client = PSEGLIClient(cookie)
@@ -38,8 +66,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Test connection
     try:
-        await hass.async_add_executor_job(client.test_connection)
-    except InvalidAuth:
+        await client.test_connection()
+        _LOGGER.info("PSEG connection test successful")
+    except InvalidAuth as e:
+        _LOGGER.error("Authentication failed: %s", e)
         raise ConfigEntryAuthFailed("Invalid authentication")
     
     # Create coordinator for automatic updates (like Opower)
@@ -57,9 +87,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Automatic statistics update: fetching today's data")
             
             # Get fresh data from PSEG
-            historical_data = await hass.async_add_executor_job(
-                client.get_usage_data, 0
-            )
+            historical_data = await client.get_usage_data(0)
             
             if "chart_data" in historical_data:
                 await _process_chart_data(hass, historical_data["chart_data"])
@@ -75,9 +103,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         try:
             # Get fresh data from PSEG with the specified days_back
-            historical_data = await hass.async_add_executor_job(
-                client.get_usage_data, days_back
-            )
+            historical_data = await client.get_usage_data(days_back)
             
             if "chart_data" in historical_data:
                 await _process_chart_data(hass, historical_data["chart_data"])
@@ -128,9 +154,7 @@ class PSEGCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Coordinator update: fetching today's data")
             
             # Get fresh data from PSEG
-            historical_data = await self.hass.async_add_executor_job(
-                self.client.get_usage_data, 0
-            )
+            historical_data = await self.client.get_usage_data(0)
             
             if "chart_data" in historical_data:
                 await _process_chart_data(self.hass, historical_data["chart_data"])

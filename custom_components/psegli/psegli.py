@@ -3,6 +3,8 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional, List
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from bs4 import BeautifulSoup
@@ -22,60 +24,31 @@ class PSEGLIClient:
         self.session = requests.Session()
         self.session.headers.update({
             "Cookie": cookie,
-            "Referer": "https://id.myaccount.psegliny.com/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "Referer": "https://mysmartenergy.psegliny.com/Dashboard",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+            "Accept": "text/plain, */*; q=0.01",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Language": "en-US,en;q=0.8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Ch-Ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Brave";v="138"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"macOS"',
+            "Sec-Gpc": "1"
         })
 
-    def test_connection(self) -> bool:
-        """Test the connection to PSEG."""
+    def _test_connection_sync(self) -> bool:
+        """Test the connection to PSEG (synchronous)."""
         try:
-            # First check if we can access the dashboard
             response = self.session.get("https://mysmartenergy.psegliny.com/Dashboard")
             response.raise_for_status()
             
             # Check if we're redirected to login page
             if "login" in response.url.lower() or "signin" in response.url.lower():
-                _LOGGER.error("Cookie expired - redirected to login page")
-                raise InvalidAuth(
-                    "Cookie expired - To get a new cookie:\n"
-                    "1. Open Chrome/Firefox Developer Tools (F12)\n"
-                    "2. Go to Network tab\n"
-                    "3. Visit https://mysmartenergy.psegliny.com\n"
-                    "4. Log in to your account\n"
-                    "5. Find any request to mysmartenergy.psegliny.com\n"
-                    "6. Copy the Cookie header value\n"
-                    "7. Go to Home Assistant > Settings > Integrations > PSEG Long Island > Configure\n"
-                    "8. Paste the new cookie"
-                )
-            
-            # Now check if we can get widget data
-            test_response = self.session.get(
-                "https://mysmartenergy.psegliny.com/Widget/LoadWidgets?Region=Usage"
-            )
-            test_response.raise_for_status()
-            
-            # Check if the response looks like HTML (indicating login redirect)
-            if "<html" in test_response.text.lower():
-                _LOGGER.error("Cookie expired - API returning HTML instead of JSON")
-                raise InvalidAuth(
-                    "Cookie expired - To get a new cookie:\n"
-                    "1. Open Chrome/Firefox Developer Tools (F12)\n"
-                    "2. Go to Network tab\n"
-                    "3. Visit https://mysmartenergy.psegliny.com\n"
-                    "4. Log in to your account\n"
-                    "5. Find any request to mysmartenergy.psegliny.com\n"
-                    "6. Copy the Cookie header value\n"
-                    "7. Go to Home Assistant > Settings > Integrations > PSEG Long Island > Configure\n"
-                    "8. Paste the new cookie"
-                )
-            
-            # Only try to parse JSON if we didn't get HTML
-            try:
-                json.loads(test_response.text)
-            except json.JSONDecodeError as err:
-                _LOGGER.error("Failed to parse API response: %s", err)
-                _LOGGER.debug("Response content: %s", test_response.text[:200])  # Log first 200 chars
-                raise InvalidAuth("Invalid API response - cookie may be expired") from err
+                _LOGGER.error("Cookie rejected - redirected to login page")
+                raise InvalidAuth("Cookie rejected - redirected to login page")
             
             _LOGGER.info("PSEG connection test successful")
             return True
@@ -83,11 +56,18 @@ class PSEGLIClient:
             _LOGGER.error("Failed to connect to PSEG: %s", err)
             raise InvalidAuth("Invalid authentication") from err
 
-    def get_usage_data(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, days_back: int = 0) -> Dict[str, Any]:
-        """Get usage data from PSEG."""
+    async def test_connection(self) -> bool:
+        """Test the connection to PSEG (async wrapper)."""
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            return await loop.run_in_executor(executor, self._test_connection_sync)
+
+    def _get_usage_data_sync(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, days_back: int = 0) -> Dict[str, Any]:
+        """Get usage data from PSEG (synchronous)."""
         try:
             # First check if our cookie is still valid
-            self.test_connection()
+            self._test_connection_sync()
+            
             # Calculate date range based on days_back parameter
             if days_back == 0:
                 # Yesterday to today (accounting for data lag)
@@ -98,13 +78,6 @@ class PSEGLIClient:
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=days_back)
             
-            # Get widget data
-            widget_response = self.session.get(
-                "https://mysmartenergy.psegliny.com/Widget/LoadWidgets?Region=Usage"
-            )
-            widget_response.raise_for_status()
-            widget_data = json.loads(widget_response.text)
-
             # First, make the Chart/ request to set up the session context and granularity
             chart_setup_url = "https://mysmartenergy.psegliny.com/Dashboard/Chart"
             chart_setup_data = {
@@ -127,6 +100,7 @@ class PSEGLIClient:
             
             _LOGGER.info("Making Chart/ setup request with hourly granularity (days_back: %d, start: %s, end: %s)", 
                         days_back, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+            
             chart_setup_response = self.session.post(chart_setup_url, data=chart_setup_data)
             chart_setup_response.raise_for_status()
 
@@ -146,6 +120,9 @@ class PSEGLIClient:
             _LOGGER.debug("ChartData response content (first 500 chars): %s", chart_response.text[:500])
             
             chart_data = json.loads(chart_response.text)
+            
+            # Create a minimal widget data structure since we're not fetching it
+            widget_data = {"AjaxResults": []}
 
             return self._parse_data(widget_data, chart_data)
 
@@ -157,6 +134,12 @@ class PSEGLIClient:
             # This usually indicates an expired cookie (server returns HTML login page instead of JSON)
             _LOGGER.error("This error typically indicates an expired authentication cookie. Please update your cookie in the PSEG integration configuration.")
             raise InvalidAuth("Authentication cookie has expired - please update your cookie") from err
+
+    async def get_usage_data(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, days_back: int = 0) -> Dict[str, Any]:
+        """Get usage data from PSEG (async wrapper)."""
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            return await loop.run_in_executor(executor, self._get_usage_data_sync, start_date, end_date, days_back)
 
     def _parse_data(self, widget_data: Dict[str, Any], chart_data: Dict[str, Any]) -> Dict[str, Any]:
         """Parse the widget and chart data."""

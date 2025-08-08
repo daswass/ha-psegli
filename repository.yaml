@@ -1,0 +1,6 @@
+name: "PSEG Long Island Automation"
+url: "https://github.com/daswass/ha-psegli"
+maintainer: "Eric Wasserman"
+description: "Automated PSEG Long Island login and energy data retrieval"
+version: "2.0.0"
+homeassistant: "2024.8.0"

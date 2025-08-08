@@ -1,0 +1,24 @@
+---
+name: "psegli-automation"
+version: "2.0.0"
+build_from: python:3.11-slim
+labels:
+  io.hass.type: addon
+  io.hass.version: "1.0.0"
+args:
+  PLAYWRIGHT_VERSION: "1.54.0"
+  PYTHON_VERSION: "3.11"
+targets:
+  psegli-automation:
+    args:
+      PLAYWRIGHT_VERSION: "1.54.0"
+      PYTHON_VERSION: "3.11"
+    tags:
+      - "ghcr.io/add-ons/psegli-automation:latest"
+      - "ghcr.io/add-ons/psegli-automation:1.0.0"
+      - "ghcr.io/add-ons/psegli-automation:{{ VERSION }}"
+    base: python:3.11-slim
+    platforms:
+      - linux/amd64
+      - linux/arm64
+      - linux/arm/v7

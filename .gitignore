@@ -56,7 +56,10 @@ pseg_*.html
 pseg_*.json
 
 # Test scripts
-test_psegli_standalone.py
+test_psegli_api_standalone.py
+test_psegli_complete.py
+test_playwright_real_click.py
+test-requirements.txt
 
 # Testing
 .coverage

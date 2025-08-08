@@ -1,0 +1,23 @@
+name: "PSEG Long Island Automation"
+version: "2.0.0"
+slug: "psegli-automation"
+description: "Automated login service for PSEG Long Island using Playwright"
+arch:
+  - armhf
+  - armv7
+  - aarch64
+  - amd64
+  - i386
+startup: application
+init: false
+ports:
+  8000/tcp: 8000
+map:
+  - config:rw
+  - ssl:rw
+webui: "http://[HOST]:[PORT:8000]"
+ingress: false
+panel_icon: mdi:lightning-bolt
+homeassistant_api: false
+homeassistant_api_filter:
+  - "psegli"

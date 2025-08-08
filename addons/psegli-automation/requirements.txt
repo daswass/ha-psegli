@@ -1,0 +1,7 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+playwright==1.54.0
+aiohttp>=3.8.0
+requests>=2.31.0

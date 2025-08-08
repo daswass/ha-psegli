@@ -8,7 +8,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.yaml import load_yaml
 
-from .const import DOMAIN, CONF_COOKIE, CONF_COOKIE_SECRET
+from .const import DOMAIN, CONF_COOKIE, CONF_USERNAME, CONF_PASSWORD
 from .psegli import PSEGLIClient
 from .exceptions import InvalidAuth
 
@@ -35,40 +35,43 @@ class PSEGLIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                cookie = user_input["cookie"]
+                # Get username and password from user input
+                username = user_input[CONF_USERNAME]
+                password = user_input[CONF_PASSWORD]
                 
-                # If user entered a secret reference, load it from secrets.yaml
-                if cookie.startswith("!secret "):
-                    secret_name = cookie.replace("!secret ", "")
-                    secrets = await self.hass.async_add_executor_job(
-                        load_yaml, self.hass.config.path("secrets.yaml")
+                # Try to get fresh cookies using automated login
+                from .auto_login import get_fresh_cookies
+                cookies = await get_fresh_cookies(username, password)
+                
+                if not cookies:
+                    errors["base"] = "login_failed"
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=self._get_schema(),
+                        errors=errors,
                     )
-                    if secrets and secret_name in secrets:
-                        cookie = secrets[secret_name]
-                    else:
-                        errors["base"] = "secret_not_found"
-                        return self.async_show_form(
-                            step_id="user",
-                            data_schema=self._get_schema(),
-                            errors=errors,
-                        )
+                
+                # Convert cookies to cookie string
+                cookie_string = "; ".join([f"{name}={value}" for name, value in cookies.items()])
                 
                 # Validate the cookie by making a test request
-                client = PSEGLIClient(cookie)
-                await self.hass.async_add_executor_job(client.test_connection)
+                client = PSEGLIClient(cookie_string)
+                await client.test_connection()
 
                 # Create the config entry
                 return self.async_create_entry(
                     title="PSEG Long Island",
                     data={
-                        CONF_COOKIE: cookie,
+                        CONF_COOKIE: cookie_string,
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: password,
                     },
                 )
 
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
+            except Exception as e:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected exception: %s", e)
                 errors["base"] = "unknown"
 
         return self.async_show_form(
@@ -79,14 +82,10 @@ class PSEGLIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def _get_schema(self):
         """Return the schema for the config flow."""
-        return vol.Schema(
-            {
-                vol.Required(
-                    "cookie",
-                    description="Enter your PSEG cookie directly or use !secret psegli_cookie to load from secrets.yaml"
-                ): str,
-            }
-        )
+        return vol.Schema({
+            vol.Required(CONF_USERNAME): str,
+            vol.Required(CONF_PASSWORD): str,
+        })
 
 
 class PSEGLIOptionsFlow(config_entries.OptionsFlow):
@@ -104,32 +103,41 @@ class PSEGLIOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             try:
-                cookie = user_input["cookie"]
+                # Get username and password from config entry
+                username = self.config_entry.data.get(CONF_USERNAME)
+                password = self.config_entry.data.get(CONF_PASSWORD)
                 
-                # If user entered a secret reference, load it from secrets.yaml
-                if cookie.startswith("!secret "):
-                    secret_name = cookie.replace("!secret ", "")
-                    secrets = await self.hass.async_add_executor_job(
-                        load_yaml, self.hass.config.path("secrets.yaml")
+                if not username or not password:
+                    errors["base"] = "credentials_not_found"
+                    return self.async_show_form(
+                        step_id="init",
+                        data_schema=self._get_options_schema(),
+                        errors=errors,
                     )
-                    if secrets and secret_name in secrets:
-                        cookie = secrets[secret_name]
-                    else:
-                        errors["base"] = "secret_not_found"
-                        return self.async_show_form(
-                            step_id="init",
-                            data_schema=self._get_options_schema(),
-                            errors=errors,
-                        )
+                
+                # Try to get fresh cookies using automated login
+                from .auto_login import get_fresh_cookies
+                cookies = await get_fresh_cookies(username, password)
+                
+                if not cookies:
+                    errors["base"] = "login_failed"
+                    return self.async_show_form(
+                        step_id="init",
+                        data_schema=self._get_options_schema(),
+                        errors=errors,
+                    )
+                
+                # Convert cookies to cookie string
+                cookie_string = "; ".join([f"{name}={value}" for name, value in cookies.items()])
                 
                 # Validate the cookie by making a test request
-                client = PSEGLIClient(cookie)
-                await self.hass.async_add_executor_job(client.test_connection)
+                client = PSEGLIClient(cookie_string)
+                await client.test_connection()
 
                 # Update the config entry data
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
-                    data={**self.config_entry.data, CONF_COOKIE: cookie},
+                    data={**self.config_entry.data, CONF_COOKIE: cookie_string},
                 )
                 
                 # Clear any persistent notification about expired cookies
@@ -158,24 +166,7 @@ class PSEGLIOptionsFlow(config_entries.OptionsFlow):
 
     def _get_options_schema(self):
         """Return the schema for the options flow."""
-        return vol.Schema(
-            {
-                vol.Required(
-                    "cookie",
-                    description=(
-                        "To get a new cookie:\n"
-                        "1. Open Chrome/Firefox Developer Tools (F12)\n"
-                        "2. Go to Network tab\n"
-                        "3. Visit https://mysmartenergy.psegliny.com\n"
-                        "4. Log in to your account\n"
-                        "5. Find any request to mysmartenergy.psegliny.com\n"
-                        "6. Copy the Cookie header value\n"
-                        "Or use !secret psegli_cookie to load from secrets.yaml"
-                    ),
-                    default=self.config_entry.data.get(CONF_COOKIE, "")
-                ): str,
-            }
-        )
+        return vol.Schema({})
 
 
 class InvalidAuth(HomeAssistantError):

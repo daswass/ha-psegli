@@ -2,15 +2,16 @@
   "step": {
     "user": {
       "title": "PSEG Long Island",
-      "description": "Enter your PSEG authentication cookie to connect to your account. You can paste the cookie directly or reference it from secrets.yaml (e.g., !secret psegli_cookie).",
+      "description": "Enter your PSEG Long Island credentials. The integration will automatically log in and obtain authentication cookies.",
       "data": {
-        "cookie": "Authentication Cookie"
+        "username": "Username/Email",
+        "password": "Password"
       }
     }
   },
   "error": {
-    "invalid_auth": "Invalid authentication. Please check your cookie and try again.",
-    "secret_not_found": "Secret not found in secrets.yaml. Please check the secret name and try again.",
+    "invalid_auth": "Invalid authentication. Please check your username and password and try again.",
+    "login_failed": "Login failed. Please check your credentials and try again.",
     "unknown": "Unexpected error occurred."
   },
   "abort": {

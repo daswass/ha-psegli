@@ -1,87 +1,150 @@
-# PSEG Long Island Integration for Home Assistant
+# PSEG Long Island Integration
 
-This integration provides real-time energy usage data from PSEG Long Island to Home Assistant.
+This integration automatically fetches energy usage data from PSEG Long Island and updates Home Assistant's Energy Dashboard statistics.
 
 ## Features
 
-- **Off-Peak Usage**: Real-time off-peak energy usage (15-minute intervals)
-- **On-Peak Usage**: Real-time on-peak energy usage (15-minute intervals)
-- **Energy Dashboard Compatible**: Includes sensors designed for Home Assistant's Energy Dashboard
+- ✅ **Fully Automated Login** - No manual cookie management required
+- ✅ **Automatic Cookie Refresh** - Handles expired cookies automatically
+- ✅ **Energy Dashboard Integration** - Updates long-term statistics
+- ✅ **Zero Manual Intervention** - Completely hands-off operation
 
-## Installation
+## Setup
 
-### Method 1: Manual Installation
+### 1. Install Playwright (Required)
 
-1. Download this integration
-2. Copy the `psegli` folder to your `config/custom_components/` directory
-3. Restart Home Assistant
+**For Home Assistant Core/Docker:**
 
-### Method 2: HACS (Recommended)
+```bash
+# SSH into your Home Assistant container
+docker exec -it homeassistant bash
 
-1. Add this repository to HACS
-2. Install the integration
-3. Restart Home Assistant
+# Install Playwright and browsers
+pip install playwright>=1.54.0
+playwright install chromium
+```
 
-## Configuration
+**For Home Assistant OS:**
 
-### Step 1: Get Your Authentication Cookie
+```bash
+# SSH into your Home Assistant OS
+ssh root@your-ha-ip
 
-1. Go to [PSEG MyAccount](https://id.myaccount.psegliny.com/)
-2. Log in to your account
-3. Open your browser's Developer Tools (F12)
-4. Go to the Network tab
-5. Navigate to the MySmartEnergy dashboard
-6. Find a request to `mysmartenergy.psegliny.com`
-7. Copy the `Cookie` header value
+# Install Playwright and browsers
+pip install playwright>=1.54.0
+playwright install chromium
+```
 
-### Step 2: Add the Integration
+**For Home Assistant Supervised:**
 
-1. In Home Assistant, go to **Settings** → **Devices & Services**
-2. Click **Add Integration**
-3. Search for "PSEG Long Island"
-4. Enter your authentication cookie
-5. Click **Submit**
+```bash
+# SSH into your host system
+ssh root@your-ha-ip
 
-## Energy Dashboard Integration
+# Install Playwright and browsers
+pip install playwright>=1.54.0
+playwright install chromium
+```
 
-This integration is fully compatible with Home Assistant's Energy Dashboard. The `sensor.pseg_total_energy_consumption` sensor is specifically designed for the Energy Dashboard and includes:
+### 2. Add Credentials to secrets.yaml
 
-- **Device Class**: `energy`
-- **State Class**: `total`
-- **Unit**: `kWh`
-- **Display Precision**: 2 decimal places
+Add your PSEG Long Island credentials to your `secrets.yaml` file:
 
-To add it to your Energy Dashboard:
+```yaml
+psegli_username: "your-email@example.com"
+psegli_password: "your-password"
+```
 
-1. Go to **Settings** → **Dashboards** → **Energy**
-2. Click **Add Consumption**
-3. Select `sensor.pseg_total_energy_consumption`
-4. Configure your energy rates and billing cycle
+### 3. Install the Integration
+
+1. Copy the `custom_components/psegli` folder to your Home Assistant `config/custom_components/` directory
+2. Restart Home Assistant
+3. Go to **Settings** → **Devices & Services** → **Add Integration**
+4. Search for "PSEG Long Island" and add it
+
+### 4. Installation Complete!
+
+The integration will:
+
+- Automatically log in using your credentials
+- Handle reCAPTCHA automatically
+- Refresh cookies when they expire
+- Update energy statistics automatically
+
+## How It Works
+
+This integration uses advanced browser automation to:
+
+1. **Automated Login** - Uses Playwright to simulate real browser interactions
+2. **reCAPTCHA Bypass** - Handles invisible reCAPTCHA automatically
+3. **Cookie Management** - Automatically refreshes expired authentication cookies
+4. **Data Fetching** - Retrieves usage data and updates Home Assistant statistics
+
+## Services
+
+### Manual Statistics Update
+
+You can manually trigger statistics updates:
+
+```yaml
+service: psegli.update_statistics
+data:
+  days_back: 7 # Optional: fetch data from 7 days ago
+```
 
 ## Troubleshooting
 
-### Invalid Authentication Error
+### Playwright Installation Issues
 
-- Make sure your cookie is current and valid
-- Try logging out and back in to PSEG to get a fresh cookie
-- Check that you're copying the entire cookie value
+If you see "Requirements for psegli not found: ['playwright>=1.54.0']":
 
-### No Data Available
+1. **For Home Assistant Core/Docker:**
 
-- The integration updates every 5 minutes
-- Check that your PSEG account has access to MySmartEnergy
-- Verify your cookie is still valid
+   ```bash
+   docker exec -it homeassistant bash
+   pip install playwright>=1.54.0
+   playwright install chromium
+   ```
 
-### Energy Dashboard Not Working
+2. **For Home Assistant OS:**
 
-- Ensure you're using `sensor.pseg_total_energy_consumption` for the Energy Dashboard
-- The sensor must have `total` state class and `energy` device class (already configured)
-- Check that the sensor is receiving data before adding to Energy Dashboard
+   ```bash
+   ssh root@your-ha-ip
+   pip install playwright>=1.54.0
+   playwright install chromium
+   ```
+
+3. **For Home Assistant Supervised:**
+   ```bash
+   ssh root@your-ha-ip
+   pip install playwright>=1.54.0
+   playwright install chromium
+   ```
+
+### Credentials Not Found
+
+- Ensure `psegli_username` and `psegli_password` are set in `secrets.yaml`
+- Restart Home Assistant after updating secrets.yaml
+
+### Login Failed
+
+- Verify your PSEG Long Island credentials are correct
+- Check that your account is not locked
+- The integration will automatically retry
+
+### No Data
+
+- The integration updates statistics automatically
+- Check the Energy Dashboard for your PSEG data
+- Use the manual service to backfill historical data
+
+## Technical Details
+
+- **Browser Automation**: Uses Playwright for reliable login
+- **reCAPTCHA Handling**: Simulates real mouse clicks to trigger invisible reCAPTCHA
+- **Cookie Management**: Automatically refreshes expired authentication cookies
+- **Statistics Integration**: Updates Home Assistant's long-term statistics API
 
 ## Support
 
-For issues and feature requests, please create an issue on the GitHub repository.
-
-## License
-
-This project is licensed under the MIT License.
+For issues or questions, please open an issue on the GitHub repository.
