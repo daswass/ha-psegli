@@ -40,8 +40,8 @@ async def login(request: LoginRequest):
         # Create auto-login instance
         auto_login = PSEGAutoLogin(request.username, request.password)
         
-        # Get fresh cookies
-        cookies = await auto_login.get_fresh_cookies()
+        # Get fresh cookies - run sync code in thread pool
+        cookies = await asyncio.to_thread(auto_login.get_fresh_cookies)
         
         if cookies:
             logger.info("Login successful, cookies obtained")

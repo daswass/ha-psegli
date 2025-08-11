@@ -167,6 +167,10 @@ The addon provides these endpoints:
 
 ## 📝 **Changelog**
 
+### **v2.1.2**
+
+- Update Stealth version
+
 ### **v2.1.1**
 
 - Add-On logic updates
