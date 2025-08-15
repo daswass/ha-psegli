@@ -1,6 +1,7 @@
 """The PSEG Long Island integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -20,7 +21,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, CONF_COOKIE
 from .psegli import InvalidAuth, PSEGLIClient
-from .auto_login import get_fresh_cookies
+from .auto_login import get_fresh_cookies, check_addon_health
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -176,41 +177,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Listen for config changes (when user updates cookie via options)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
     
-    # Set up automatic updates (like Opower)
-    async def async_update_statistics_automatic() -> None:
-        """Automatically update statistics with latest PSEG data."""
-        try:
-            # Get today's data (days_back=0 means yesterday to today)
-            _LOGGER.debug("Automatic statistics update: fetching today's data")
-            
-            # Get the current client instance from hass.data (which gets updated during cookie refresh)
-            current_client = hass.data[DOMAIN][entry.entry_id]
-            
-            # Debug: Log which client we're using and its cookie
-            _LOGGER.debug("Automatic update using client with cookie: %s", 
-                         current_client.cookie[:50] + "..." if len(current_client.cookie) > 50 else current_client.cookie)
-            
-            # Get fresh data from PSEG
-            historical_data = await current_client.get_usage_data(0)
-            
-            if "chart_data" in historical_data:
-                await _process_chart_data(hass, historical_data["chart_data"])
-                
-        except Exception as e:
-            _LOGGER.error("Failed to update statistics automatically: %s", e)
-    
     # Register manual service for backfilling
     async def async_update_statistics_manual(call: Any) -> None:
         """Manually update statistics table with PSEG data (for backfilling)."""
         days_back = call.data.get("days_back", 0)
-        _LOGGER.info("Manual statistics update service (days_back: %d)", days_back)
+        _LOGGER.info("Statistics update service (days_back: %d)", days_back)
         
         try:
             # Get the current client instance from hass.data (which gets updated during cookie refresh)
             current_client = hass.data[DOMAIN][entry.entry_id]
             
             # Debug: Log which client we're using and its cookie
-            _LOGGER.debug("Manual update using client with cookie: %s", 
+            _LOGGER.debug("Update using client with cookie: %s", 
                          current_client.cookie[:50] + "..." if len(current_client.cookie) > 50 else current_client.cookie)
             
             # Get fresh data from PSEG with the specified days_back
@@ -218,12 +196,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             
             if "chart_data" in historical_data:
                 await _process_chart_data(hass, historical_data["chart_data"])
-                _LOGGER.info("Manual statistics update completed successfully")
+                _LOGGER.info("Statistics update completed successfully")
             else:
                 _LOGGER.warning("No chart data found in response")
                 
+        except InvalidAuth as e:
+            _LOGGER.error("Authentication failed during update: %s", e)
+            _LOGGER.info("Cookie refresh will be attempted at the next scheduled time (XX:00 or XX:30)")
+            
         except Exception as e:
-            _LOGGER.error("Failed to update statistics manually: %s", e)
+            _LOGGER.error("Failed to update statistics: %s", e)
 
     # Register the manual service
     hass.services.async_register(
@@ -235,7 +217,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register the cookie refresh service
     async def async_refresh_cookie(call: Any) -> None:
         """Manually refresh the PSEG authentication cookie."""
-        _LOGGER.info("Manual cookie refresh service called")
+        _LOGGER.info("Cookie refresh service called")
         
         try:
             username = entry.data.get(CONF_USERNAME)
@@ -248,7 +230,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.info("Attempting to refresh cookie via addon...")
             
             # Check if addon is healthy before attempting refresh
-            from .auto_login import check_addon_health
             if not await check_addon_health():
                 _LOGGER.error("Addon not available or unhealthy, cannot refresh cookie")
                 return
@@ -338,6 +319,102 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_refresh_cookie
     )
     
+    # Set up scheduled cookie refresh at XX:00 and XX:30
+    async def async_scheduled_cookie_refresh() -> None:
+        """Automatically refresh cookies at scheduled times (XX:00 and XX:30)."""
+        _LOGGER.info("Scheduled cookie refresh triggered")
+        
+        try:
+            username = entry.data.get(CONF_USERNAME)
+            password = entry.data.get(CONF_PASSWORD)
+            
+            if not username or not password:
+                _LOGGER.warning("No credentials available for scheduled cookie refresh")
+                return
+            
+            # Check if addon is healthy before attempting refresh
+            if not await check_addon_health():
+                _LOGGER.warning("Addon not available or unhealthy, skipping scheduled cookie refresh")
+                return
+            
+            # Attempt to get fresh cookies
+            cookies = await get_fresh_cookies(username, password)
+            
+            if cookies:
+                # Cookies are already in string format from addon
+                cookie_string = cookies
+                
+                # Get the actual client instance from hass.data
+                current_client = hass.data[DOMAIN][entry.entry_id]
+                
+                # Update the client with new cookie
+                current_client.update_cookie(cookie_string)
+                
+                # Also update the coordinator's client if it exists
+                if hasattr(entry, 'runtime_data') and entry.runtime_data:
+                    coordinator = entry.runtime_data
+                    if hasattr(coordinator, 'client'):
+                        coordinator.client.update_cookie(cookie_string)
+                        _LOGGER.info("✅ Updated coordinator client cookie")
+                
+                _LOGGER.info("✅ Updated client cookie: %s", cookie_string[:50] + "..." if len(cookie_string) > 50 else cookie_string)
+                _LOGGER.info("✅ Updated client session headers")
+                
+                # Update the config entry
+                hass.config_entries.async_update_entry(
+                    entry,
+                    data={**entry.data, CONF_COOKIE: cookie_string},
+                )
+                
+                _LOGGER.info("✅ Updated config entry with new cookie")
+                _LOGGER.info("Scheduled cookie refresh completed successfully")
+                
+                # Test the new cookie
+                await current_client.test_connection()
+                _LOGGER.info("New cookie validation successful")
+                
+                # IMPORTANT: After scheduled cookie refresh, trigger a statistics update to use the fresh cookies
+                _LOGGER.info("Triggering statistics update with fresh cookies...")
+                try:
+                    # Call the function directly instead of the service to avoid context issues
+                    await async_update_statistics_manual(type('Call', (), {'data': {'days_back': 0}})())
+                    _LOGGER.info("Statistics update completed successfully with fresh cookies")
+                except Exception as stats_err:
+                    _LOGGER.error("Statistics update failed even with fresh cookies: %s", stats_err)
+                
+            else:
+                _LOGGER.warning("Addon failed to provide fresh cookies during scheduled refresh")
+                
+        except Exception as e:
+            _LOGGER.error("Failed to refresh cookie during scheduled refresh: %s", e)
+    
+    # Use standard Home Assistant approach: refresh cookies at XX:00 and XX:30
+    async def refresh_cookies_scheduled():
+        """Refresh cookies at scheduled times (XX:00 and XX:30)."""
+        while True:
+            now = datetime.now()
+            
+            # Calculate next refresh time (XX:00 or XX:30)
+            if now.minute < 30:
+                # Next refresh at XX:30
+                next_refresh = now.replace(minute=30, second=0, microsecond=0)
+            else:
+                # Next refresh at XX:00 (next hour)
+                next_refresh = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            
+            # Wait until next refresh time
+            wait_seconds = (next_refresh - now).total_seconds()
+            _LOGGER.info("Next scheduled cookie refresh at %s (in %.0f seconds)", 
+                         next_refresh.strftime("%H:%M"), wait_seconds)
+            
+            await asyncio.sleep(wait_seconds)
+            
+            # Trigger the cookie refresh
+            await async_scheduled_cookie_refresh()
+    
+    # Start the scheduled cookie refresh task AFTER all services are registered
+    hass.async_create_task(refresh_cookies_scheduled())
+    
     return True
 
 class PSEGCoordinator(DataUpdateCoordinator):
@@ -349,8 +426,8 @@ class PSEGCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="PSEG",
-            # Update every 15 minutes to get fresh data
-            update_interval=timedelta(minutes=15),
+            # No automatic updates - only manual and scheduled
+            update_interval=None,
         )
         self.entry = entry
         self.client = client
@@ -367,29 +444,21 @@ class PSEGCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Fetch data from PSEG and update statistics."""
         try:
-            # Get today's data (days_back=0 means yesterday to today)
-            _LOGGER.debug("Coordinator update: fetching today's data")
+            # Call the exact same function as manual update to ensure consistency
+            # This ensures both manual and automatic updates use identical code paths
+            await self.hass.services.async_call(
+                DOMAIN,
+                "update_statistics",
+                {"days_back": 0},
+                blocking=True
+            )
             
-            # Always get the current client from hass.data to ensure we have the latest cookie
-            current_client = self.hass.data[DOMAIN][self.entry.entry_id]
-            
-            # Debug: Log which client we're using and its cookie
-            _LOGGER.debug("Using client from hass.data with cookie: %s", 
-                         current_client.cookie[:50] + "..." if len(current_client.cookie) > 50 else current_client.cookie)
-            
-            # Get fresh data from PSEG
-            historical_data = await current_client.get_usage_data(0)
-            
-            if "chart_data" in historical_data:
-                await _process_chart_data(self.hass, historical_data["chart_data"])
-                
-            return historical_data
+            # Return a simple success indicator since the service handles the actual work
+            return {"status": "success"}
                 
         except InvalidAuth as e:
             _LOGGER.error("Authentication failed during coordinator update: %s", e)
-            
-            # Try to get fresh cookies from addon if available
-            await self._attempt_cookie_refresh()
+            _LOGGER.info("Cookie refresh will be attempted at the next scheduled time (XX:00 or XX:30)")
             
             # Create a persistent notification to alert the user
             await self.hass.async_create_task(
@@ -398,7 +467,7 @@ class PSEGCoordinator(DataUpdateCoordinator):
                     "create",
                     {
                         "title": "PSEG Integration: Authentication Failed",
-                        "message": f"Your PSEG cookie has expired. Please go to Settings > Integrations > PSEG Long Island > Configure to update your cookie.\n\nError: {e}",
+                        "message": f"Your PSEG cookie has expired. Cookie refresh will be attempted at the next scheduled time (XX:00 or XX:30).\n\nError: {e}",
                         "notification_id": "psegli_auth_failed",
                     },
                 )
@@ -407,74 +476,6 @@ class PSEGCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.error("Failed to update PSEG data: %s", e)
             raise UpdateFailed(f"Failed to update PSEG data: {e}")
-
-    async def _attempt_cookie_refresh(self):
-        """Attempt to refresh the cookie using the addon if available and healthy."""
-        try:
-            username = self.entry.data.get(CONF_USERNAME)
-            password = self.entry.data.get(CONF_PASSWORD)
-            
-            if not username or not password:
-                _LOGGER.warning("No credentials available for cookie refresh")
-                return
-            
-            _LOGGER.info("Attempting to refresh expired cookie via addon...")
-            
-            # Check if addon is healthy before attempting refresh
-            from .auto_login import check_addon_health
-            if not await check_addon_health():
-                _LOGGER.info("Addon not available or unhealthy, skipping automatic cookie refresh")
-                return
-            
-            # Attempt to get fresh cookies
-            cookies = await get_fresh_cookies(username, password)
-            
-            if cookies:
-                # Cookies is already a string from the addon, use it directly
-                cookie_string = cookies
-                
-                # Create a fresh session with the new cookie to avoid session state issues
-                from .psegli import PSEGLIClient
-                new_client = PSEGLIClient(cookie_string)
-                
-                # Update both the coordinator's client and the one stored in hass.data
-                self.client = new_client
-                self.hass.data[DOMAIN][self.entry.entry_id] = new_client
-                
-                # Update the config entry
-                self.hass.config_entries.async_update_entry(
-                    self.entry,
-                    data={**self.entry.data, CONF_COOKIE: cookie_string},
-                )
-                
-                _LOGGER.info("Successfully refreshed cookie via addon")
-                
-                # Test the new cookie
-                await self.client.test_connection()
-                _LOGGER.info("New cookie validation successful")
-                
-                # IMPORTANT: Retry the failed operation with the new cookie
-                _LOGGER.info("Retrying failed operation with new cookie...")
-                try:
-                    # Get fresh data from PSEG with the new cookie
-                    historical_data = await self.client.get_usage_data(0)
-                    
-                    if "chart_data" in historical_data:
-                        await _process_chart_data(self.hass, historical_data["chart_data"])
-                        _LOGGER.info("Successfully retried operation with new cookie")
-                        return historical_data  # Return the data to avoid UpdateFailed
-                    else:
-                        _LOGGER.warning("No chart data found in retry attempt")
-                        
-                except Exception as retry_err:
-                    _LOGGER.error("Retry attempt failed even with new cookie: %s", retry_err)
-                    # Don't raise here - let the original UpdateFailed happen
-                
-            else:
-                _LOGGER.warning("Addon failed to provide fresh cookies")
-                
-        except Exception as e:
-            _LOGGER.error("Failed to refresh cookie via addon: %s", e)
 
 async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -> None:
     """Process chart data and update statistics."""

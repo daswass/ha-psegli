@@ -64,9 +64,91 @@ class PSEGLIClient:
 
     async def test_connection(self) -> bool:
         """Test the connection to PSEG (async wrapper)."""
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._test_connection_sync)
+        try:
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor() as executor:
+                return await loop.run_in_executor(executor, self._test_connection_sync)
+        except RuntimeError:
+            # Fallback for when there's no running loop
+            return self._test_connection_sync()
+
+    def _get_dashboard_page(self) -> tuple[str, str]:
+        """Get the Dashboard page and extract RequestVerificationToken."""
+        _LOGGER.info("Getting RequestVerificationToken from Dashboard page...")
+        dashboard_response = self.session.get("https://mysmartenergy.psegliny.com/Dashboard")
+        if dashboard_response.status_code != 200:
+            raise InvalidAuth("Failed to get Dashboard page")
+        
+        # Extract the token from the page
+        import re
+        token_match = re.search(r'name="__RequestVerificationToken" type="hidden" value="([^"]+)"', dashboard_response.text)
+        if token_match:
+            request_token = token_match.group(1)
+            _LOGGER.debug("Found RequestVerificationToken: %s...", request_token[:20])
+        else:
+            _LOGGER.error("Could not find RequestVerificationToken on /Dashboard")
+            raise InvalidAuth("Could not find RequestVerificationToken on /Dashboard")
+        
+        return dashboard_response.text, request_token
+
+    def _setup_chart_context(self, request_token: str, start_date: datetime, end_date: datetime) -> None:
+        """Set up the Chart context with hourly granularity."""
+        chart_setup_url = "https://mysmartenergy.psegliny.com/Dashboard/Chart"
+        chart_setup_data = {
+            "__RequestVerificationToken": request_token,
+            "UsageInterval": "5",  # 5 = Hourly granularity
+            "UsageType": "1",
+            "jsTargetName": "StorageType",
+            "EnableHoverChart": "true",
+            "Start": start_date.strftime("%Y-%m-%d"),
+            "End": end_date.strftime("%Y-%m-%d"),
+            "IsRangeOpen": "False",
+            "MaintainMaxDate": "true",
+            "SelectedViaDateRange": "False",
+            "ChartComparison": "1",
+            "ChartComparison2": "0",
+            "ChartComparison3": "0",
+            "ChartComparison4": "0"
+        }
+        
+        _LOGGER.info("Making Chart/ setup request with hourly granularity (start: %s, end: %s)", 
+                    start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        _LOGGER.debug("Chart setup data: %s", chart_setup_data)
+        
+        chart_setup_response = self.session.post(chart_setup_url, data=chart_setup_data)
+        chart_setup_response.raise_for_status()
+        
+        # Check for redirect response in Chart/ request - if it redirects, the request failed
+        try:
+            chart_setup_json = json.loads(chart_setup_response.text)
+            if "AjaxResults" in chart_setup_json and chart_setup_json["AjaxResults"]:
+                for result in chart_setup_json["AjaxResults"]:
+                    if result.get("Action") == "Redirect":
+                        _LOGGER.error("Chart setup request FAILED - redirected to: %s", result.get('Value'))
+                        _LOGGER.error("This means the hourly context was not set - cannot proceed to get hourly data")
+                        raise InvalidAuth("Chart setup request failed - hourly context not established")
+        except json.JSONDecodeError:
+            _LOGGER.error("Chart setup response is not JSON - request failed")
+            raise InvalidAuth("Chart setup response is not JSON - request failed")
+
+    def _get_chart_data(self) -> dict[str, Any]:
+        """Get the actual chart data from PSEG."""
+        chart_data_url = "https://mysmartenergy.psegliny.com/Dashboard/ChartData"
+        chart_data_params = {
+            "_": int(datetime.now().timestamp() * 1000)  # Cache buster
+        }
+        
+        _LOGGER.info("Making ChartData/ request to get hourly data")
+        chart_response = self.session.get(chart_data_url, params=chart_data_params)
+        chart_response.raise_for_status()
+        
+        # Debug: Log the response content
+        _LOGGER.debug("ChartData response status: %s", chart_response.status_code)
+        _LOGGER.debug("ChartData response headers: %s", dict(chart_response.headers))
+        _LOGGER.debug("ChartData response content (first 500 chars): %s", chart_response.text[:500])
+        
+        chart_data = json.loads(chart_response.text)
+        return chart_data
 
     def _get_usage_data_sync(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, days_back: int = 0) -> Dict[str, Any]:
         """Get usage data from PSEG (synchronous)."""
@@ -87,77 +169,14 @@ class PSEGLIClient:
             _LOGGER.info("Date calculation: days_back=%d, start_date=%s, end_date=%s", 
                         days_back, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
             
-            # First, get the RequestVerificationToken from the Dashboard page
-            _LOGGER.info("Getting RequestVerificationToken from Dashboard page...")
-            dashboard_response = self.session.get("https://mysmartenergy.psegliny.com/Dashboard")
-            if dashboard_response.status_code != 200:
-                raise InvalidAuth("Failed to get Dashboard page")
+            # Step 1: Get Dashboard page and extract token
+            _, request_token = self._get_dashboard_page()
             
-            # Extract the token from the page
-            import re
-            token_match = re.search(r'name="__RequestVerificationToken" type="hidden" value="([^"]+)"', dashboard_response.text)
-            if token_match:
-                request_token = token_match.group(1)
-                _LOGGER.debug("Found RequestVerificationToken: %s...", request_token[:20])
-            else:
-                _LOGGER.warning("Could not find RequestVerificationToken, using empty string")
-                request_token = ""
+            # Step 2: Set up Chart context
+            self._setup_chart_context(request_token, start_date, end_date)
             
-            # Then, make the Chart/ request to set up the session context and granularity
-            chart_setup_url = "https://mysmartenergy.psegliny.com/Dashboard/Chart"
-            chart_setup_data = {
-                "__RequestVerificationToken": request_token,  # Use the actual token from the page
-                "UsageInterval": "5",  # 5 = Hourly granularity
-                "UsageType": "1",
-                "jsTargetName": "StorageType",
-                "EnableHoverChart": "true",
-                "Start": start_date.strftime("%Y-%m-%d"),
-                "End": end_date.strftime("%Y-%m-%d"),
-                "IsRangeOpen": "False",
-                "MaintainMaxDate": "true",
-                "SelectedViaDateRange": "False",
-                "ChartComparison": "1",
-                "ChartComparison2": "0",
-                "ChartComparison3": "0",
-                "ChartComparison4": "0"
-            }
-            
-            _LOGGER.info("Making Chart/ setup request with hourly granularity (days_back: %d, start: %s, end: %s)", 
-                        days_back, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-            _LOGGER.debug("Chart setup data: %s", chart_setup_data)
-            
-            chart_setup_response = self.session.post(chart_setup_url, data=chart_setup_data)
-            chart_setup_response.raise_for_status()
-            
-            # Check for redirect response in Chart/ request - if it redirects, the request failed
-            try:
-                chart_setup_json = json.loads(chart_setup_response.text)
-                if "AjaxResults" in chart_setup_json and chart_setup_json["AjaxResults"]:
-                    for result in chart_setup_json["AjaxResults"]:
-                        if result.get("Action") == "Redirect":
-                            _LOGGER.error("Chart setup request FAILED - redirected to: %s", result.get('Value'))
-                            _LOGGER.error("This means the hourly context was not set - cannot proceed to get hourly data")
-                            raise InvalidAuth("Chart setup request failed - hourly context not established")
-            except json.JSONDecodeError:
-                _LOGGER.error("Chart setup response is not JSON - request failed")
-                raise InvalidAuth("Chart setup response is not JSON - request failed")
-
-            # Then, make the ChartData/ request to get the actual data
-            chart_data_url = "https://mysmartenergy.psegliny.com/Dashboard/ChartData"
-            chart_data_params = {
-                "_": int(datetime.now().timestamp() * 1000)  # Cache buster
-            }
-            
-            _LOGGER.info("Making ChartData/ request to get hourly data")
-            chart_response = self.session.get(chart_data_url, params=chart_data_params)
-            chart_response.raise_for_status()
-            
-            # Debug: Log the response content
-            _LOGGER.debug("ChartData response status: %s", chart_response.status_code)
-            _LOGGER.debug("ChartData response headers: %s", dict(chart_response.headers))
-            _LOGGER.debug("ChartData response content (first 500 chars): %s", chart_response.text[:500])
-            
-            chart_data = json.loads(chart_response.text)
+            # Step 3: Get actual chart data
+            chart_data = self._get_chart_data()
             
             # Create a minimal widget data structure since we're not fetching it
             widget_data = {"AjaxResults": []}
