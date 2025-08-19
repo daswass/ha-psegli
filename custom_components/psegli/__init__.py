@@ -174,6 +174,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = PSEGCoordinator(hass, entry, client)
     entry.runtime_data = coordinator
     
+    # Store coordinator reference in hass.data for proper cleanup
+    if DOMAIN not in hass.data:
+        hass.data[DOMAIN] = {}
+    hass.data[DOMAIN]['coordinator'] = coordinator
+    
     # Listen for config changes (when user updates cookie via options)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
     
@@ -413,7 +418,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await async_scheduled_cookie_refresh()
     
     # Start the scheduled cookie refresh task AFTER all services are registered
-    hass.async_create_task(refresh_cookies_scheduled())
+    # Use a global flag that persists across reloads to prevent multiple tasks
+    if 'global_scheduled_task_running' not in hass.data:
+        hass.data['global_scheduled_task_running'] = True
+        task = hass.async_create_task(refresh_cookies_scheduled())
+        hass.data['global_scheduled_task'] = task
+        _LOGGER.info("Started global scheduled cookie refresh task")
+    else:
+        _LOGGER.info("Global scheduled cookie refresh task already running, skipping duplicate")
     
     return True
 
@@ -432,14 +444,6 @@ class PSEGCoordinator(DataUpdateCoordinator):
         self.entry = entry
         self.client = client
 
-        @callback
-        def _dummy_listener() -> None:
-            pass
-
-        # Force the coordinator to periodically update by registering at least one listener.
-        # Needed when there are no sensors, so _async_update_data still gets called
-        # which is needed for _insert_statistics.
-        self.async_add_listener(_dummy_listener)
 
     async def _async_update_data(self):
         """Fetch data from PSEG and update statistics."""
@@ -708,8 +712,9 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update options for PSEG Long Island."""
-    # Reload the config entry when options change (when user updates cookie)
-    await hass.config_entries.async_reload(entry.entry_id)
+    # Don't reload the entire config entry - just update the data
+    # This prevents creating multiple scheduled tasks
+    _LOGGER.info("Options updated - no reload needed")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -717,6 +722,29 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Unload the coordinator
     if entry.runtime_data:
         await entry.runtime_data.async_shutdown()
+    
+    # Clean up coordinator reference from hass.data
+    if DOMAIN in hass.data and 'coordinator' in hass.data[DOMAIN]:
+        del hass.data[DOMAIN]['coordinator']
+    
+    # Clean up global scheduled task flag if this is the last instance
+    if 'global_scheduled_task_running' in hass.data:
+        # Check if there are other instances running
+        other_instances = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
+        if not other_instances:
+            # Cancel the running scheduled task
+            if 'global_scheduled_task' in hass.data:
+                try:
+                    task = hass.data['global_scheduled_task']
+                    if not task.done():
+                        task.cancel()
+                        _LOGGER.info("Cancelled global scheduled cookie refresh task")
+                except Exception as e:
+                    _LOGGER.warning("Error cancelling global scheduled task: %s", e)
+                del hass.data['global_scheduled_task']
+            
+            del hass.data['global_scheduled_task_running']
+            _LOGGER.info("Cleaned up global scheduled task flag (last instance)")
     
     # Remove the services
     hass.services.async_remove(DOMAIN, "update_statistics")

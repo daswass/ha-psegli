@@ -1,5 +1,5 @@
 name: "PSEG Long Island Automation"
-version: "2.2.0"
+version: "2.3.0"
 slug: "psegli-automation"
 description: "Automated login service for PSEG Long Island using Playwright"
 arch:

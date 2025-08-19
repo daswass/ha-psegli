@@ -167,6 +167,10 @@ The addon provides these endpoints:
 
 ## 📝 **Changelog**
 
+### **v2.3.0**
+
+- Improved auto-update scheduling
+
 ### **v2.2.0**
 
 - Refactored Add-On
