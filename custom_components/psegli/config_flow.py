@@ -48,8 +48,7 @@ class PSEGLIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         cookies = await get_fresh_cookies(username, password)
                         
                         if cookies:
-                            # Cookies are already in string format from addon
-                            cookie_string = cookies
+                            cookie = cookies
                             _LOGGER.debug("Successfully obtained fresh cookies from addon")
                         else:
                             _LOGGER.warning("Addon not available or failed to get cookies")
