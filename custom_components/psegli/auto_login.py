@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Automated login for PSEG Long Island using the automation addon."""
 
-import asyncio
 import logging
 import aiohttp
 from typing import Dict, Optional
@@ -48,7 +47,6 @@ async def get_fresh_cookies(username: str, password: str) -> Optional[str]:
         
         # Try to connect to the addon
         async with aiohttp.ClientSession() as session:
-            # Request login via addon
             login_data = {
                 "username": username,
                 "password": password
