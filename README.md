@@ -167,6 +167,10 @@ The addon provides these endpoints:
 
 ## 📝 **Changelog**
 
+### **v2.3.1**
+
+- Cleanup logging
+
 ### **v2.3.0**
 
 - Improved auto-update scheduling
