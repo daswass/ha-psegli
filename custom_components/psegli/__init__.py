@@ -87,14 +87,14 @@ async def get_last_cumulative_kwh(hass: HomeAssistant, statistic_id: str, before
                 valid_stats.sort(key=lambda x: x[0])
                 most_recent_time, most_recent_sum = valid_stats[-1]
                 
-                _LOGGER.info("Found last cumulative sum: %.6f for %s at %s (before %s)", 
+                _LOGGER.debug("Found last cumulative sum: %.6f for %s at %s (before %s)", 
                              most_recent_sum, statistic_id, most_recent_time, before_timestamp)
                 return most_recent_sum
             else:
-                _LOGGER.info("No valid statistics found before %s for %s", before_timestamp, statistic_id)
+                _LOGGER.debug("No valid statistics found before %s for %s", before_timestamp, statistic_id)
                 return 0.0
         else:
-            _LOGGER.info("No statistics found in lookback window for %s", statistic_id)
+            _LOGGER.debug("No statistics found in lookback window for %s", statistic_id)
             return 0.0
             
     except Exception as e:
@@ -120,14 +120,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # If no cookie available, try to get one from the addon
     if not cookie:
-        _LOGGER.info("No cookie available, attempting to get fresh cookies from addon...")
+        _LOGGER.debug("No cookie available, attempting to get fresh cookies from addon...")
         try:
             cookies = await get_fresh_cookies(username, password)
             
             if cookies:
                 # Cookies are already in string format from addon
                 cookie_string = cookies
-                _LOGGER.info("Successfully obtained fresh cookies from addon")
+                _LOGGER.debug("Successfully obtained fresh cookies from addon")
                 
                 # Store cookie in config entry for future use
                 hass.config_entries.async_update_entry(
@@ -165,7 +165,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Test connection
     try:
         await client.test_connection()
-        _LOGGER.info("PSEG connection test successful")
+        _LOGGER.debug("PSEG connection test successful")
     except InvalidAuth as e:
         _LOGGER.error("Authentication failed: %s", e)
         raise ConfigEntryAuthFailed("Invalid authentication")
@@ -186,7 +186,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def async_update_statistics_manual(call: Any) -> None:
         """Manually update statistics table with PSEG data (for backfilling)."""
         days_back = call.data.get("days_back", 0)
-        _LOGGER.info("Statistics update service (days_back: %d)", days_back)
+        _LOGGER.debug("Statistics update service (days_back: %d)", days_back)
         
         try:
             # Get the current client instance from hass.data (which gets updated during cookie refresh)
@@ -201,13 +201,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             
             if "chart_data" in historical_data:
                 await _process_chart_data(hass, historical_data["chart_data"])
-                _LOGGER.info("Statistics update completed successfully")
+                _LOGGER.debug("Statistics update completed successfully")
             else:
                 _LOGGER.warning("No chart data found in response")
                 
         except InvalidAuth as e:
             _LOGGER.error("Authentication failed during update: %s", e)
-            _LOGGER.info("Cookie refresh will be attempted at the next scheduled time (XX:00 or XX:30)")
+            _LOGGER.debug("Cookie refresh will be attempted at the next scheduled time (XX:00 or XX:30)")
             
         except Exception as e:
             _LOGGER.error("Failed to update statistics: %s", e)
@@ -222,7 +222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register the cookie refresh service
     async def async_refresh_cookie(call: Any) -> None:
         """Manually refresh the PSEG authentication cookie."""
-        _LOGGER.info("Cookie refresh service called")
+        _LOGGER.debug("Cookie refresh service called")
         
         try:
             username = entry.data.get(CONF_USERNAME)
@@ -232,7 +232,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.error("No credentials available for cookie refresh")
                 return
             
-            _LOGGER.info("Attempting to refresh cookie via addon...")
+            _LOGGER.debug("Attempting to refresh cookie via addon...")
             
             # Check if addon is healthy before attempting refresh
             if not await check_addon_health():
@@ -257,10 +257,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     coordinator = entry.runtime_data
                     if hasattr(coordinator, 'client'):
                         coordinator.client.update_cookie(cookie_string)
-                        _LOGGER.info("✅ Updated coordinator client cookie")
+                        _LOGGER.debug("✅ Updated coordinator client cookie")
                 
-                _LOGGER.info("✅ Updated client cookie: %s", cookie_string[:50] + "..." if len(cookie_string) > 50 else cookie_string)
-                _LOGGER.info("✅ Updated client session headers")
+                _LOGGER.debug("✅ Updated client cookie: %s", cookie_string[:50] + "..." if len(cookie_string) > 50 else cookie_string)
+                _LOGGER.debug("✅ Updated client session headers")
                 
                 # Update the config entry
                 hass.config_entries.async_update_entry(
@@ -268,12 +268,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     data={**entry.data, CONF_COOKIE: cookie_string},
                 )
                 
-                _LOGGER.info("✅ Updated config entry with new cookie")
-                _LOGGER.info("Successfully refreshed cookie via addon")
+                _LOGGER.debug("✅ Updated config entry with new cookie")
+                _LOGGER.debug("Successfully refreshed cookie via addon")
                 
                 # Test the new cookie
                 await current_client.test_connection()
-                _LOGGER.info("New cookie validation successful")
+                _LOGGER.debug("New cookie validation successful")
                 
                 # Create a success notification
                 await hass.async_create_task(
@@ -327,7 +327,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set up scheduled cookie refresh at XX:00 and XX:30
     async def async_scheduled_cookie_refresh() -> None:
         """Automatically refresh cookies at scheduled times (XX:00 and XX:30)."""
-        _LOGGER.info("Scheduled cookie refresh triggered")
+        _LOGGER.debug("Scheduled cookie refresh triggered")
         
         try:
             username = entry.data.get(CONF_USERNAME)
@@ -348,8 +348,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if cookies:
                 # Cookies are already in string format from addon
                 cookie_string = cookies
-                
-                # Get the actual client instance from hass.data
                 current_client = hass.data[DOMAIN][entry.entry_id]
                 
                 # Update the client with new cookie
@@ -360,10 +358,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     coordinator = entry.runtime_data
                     if hasattr(coordinator, 'client'):
                         coordinator.client.update_cookie(cookie_string)
-                        _LOGGER.info("✅ Updated coordinator client cookie")
+                        _LOGGER.debug("✅ Updated coordinator client cookie")
                 
-                _LOGGER.info("✅ Updated client cookie: %s", cookie_string[:50] + "..." if len(cookie_string) > 50 else cookie_string)
-                _LOGGER.info("✅ Updated client session headers")
+                _LOGGER.debug("✅ Updated client cookie: %s", cookie_string[:50] + "..." if len(cookie_string) > 50 else cookie_string)
+                _LOGGER.debug("✅ Updated client session headers")
                 
                 # Update the config entry
                 hass.config_entries.async_update_entry(
@@ -371,19 +369,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     data={**entry.data, CONF_COOKIE: cookie_string},
                 )
                 
-                _LOGGER.info("✅ Updated config entry with new cookie")
-                _LOGGER.info("Scheduled cookie refresh completed successfully")
+                _LOGGER.debug("✅ Updated config entry with new cookie")
+                _LOGGER.debug("Scheduled cookie refresh completed successfully")
                 
-                # Test the new cookie
                 await current_client.test_connection()
-                _LOGGER.info("New cookie validation successful")
+                _LOGGER.debug("New cookie validation successful")
                 
-                # IMPORTANT: After scheduled cookie refresh, trigger a statistics update to use the fresh cookies
-                _LOGGER.info("Triggering statistics update with fresh cookies...")
+                _LOGGER.debug("Triggering statistics update with fresh cookies...")
                 try:
-                    # Call the function directly instead of the service to avoid context issues
                     await async_update_statistics_manual(type('Call', (), {'data': {'days_back': 0}})())
-                    _LOGGER.info("Statistics update completed successfully with fresh cookies")
+                    _LOGGER.debug("Statistics update completed successfully with fresh cookies")
                 except Exception as stats_err:
                     _LOGGER.error("Statistics update failed even with fresh cookies: %s", stats_err)
                 
@@ -399,22 +394,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         while True:
             now = datetime.now()
             
-            # Calculate next refresh time (XX:00 or XX:30)
             if now.minute < 30:
-                # Next refresh at XX:30
                 next_refresh = now.replace(minute=30, second=0, microsecond=0)
             else:
                 # Next refresh at XX:00 (next hour)
                 next_refresh = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
             
-            # Wait until next refresh time
             wait_seconds = (next_refresh - now).total_seconds()
-            _LOGGER.info("Next scheduled cookie refresh at %s (in %.0f seconds)", 
+            _LOGGER.debug("Next scheduled cookie refresh at %s (in %.0f seconds)", 
                          next_refresh.strftime("%H:%M"), wait_seconds)
             
             await asyncio.sleep(wait_seconds)
             
-            # Trigger the cookie refresh
             await async_scheduled_cookie_refresh()
     
     # Start the scheduled cookie refresh task AFTER all services are registered
@@ -423,9 +414,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data['global_scheduled_task_running'] = True
         task = hass.async_create_task(refresh_cookies_scheduled())
         hass.data['global_scheduled_task'] = task
-        _LOGGER.info("Started global scheduled cookie refresh task")
+        _LOGGER.debug("Started global scheduled cookie refresh task")
     else:
-        _LOGGER.info("Global scheduled cookie refresh task already running, skipping duplicate")
+        _LOGGER.debug("Global scheduled cookie refresh task already running, skipping duplicate")
     
     return True
 
@@ -448,7 +439,6 @@ class PSEGCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Fetch data from PSEG and update statistics."""
         try:
-            # Call the exact same function as manual update to ensure consistency
             # This ensures both manual and automatic updates use identical code paths
             await self.hass.services.async_call(
                 DOMAIN,
@@ -462,7 +452,7 @@ class PSEGCoordinator(DataUpdateCoordinator):
                 
         except InvalidAuth as e:
             _LOGGER.error("Authentication failed during coordinator update: %s", e)
-            _LOGGER.info("Cookie refresh will be attempted at the next scheduled time (XX:00 or XX:30)")
+            _LOGGER.debug("Cookie refresh will be attempted at the next scheduled time (XX:00 or XX:30)")
             
             # Create a persistent notification to alert the user
             await self.hass.async_create_task(
@@ -500,7 +490,7 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
                 try:
                     import json
                     valid_points = json.loads(valid_points)
-                    _LOGGER.info("Successfully parsed valid_points from string")
+                    _LOGGER.debug("Successfully parsed valid_points from string")
                 except Exception as e:
                     _LOGGER.error("Failed to parse valid_points string: %s", e)
                     continue
@@ -509,21 +499,20 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
                 _LOGGER.warning("Valid points is not a list: %s", type(valid_points))
                 continue
             
-            # Determine which statistic this series maps to (using proper format)
+            # Determine which statistic this series maps to
             if "Off-Peak" in series_name:
-                statistic_id = "psegli:off_peak_usage"  # Use proper format like Opower
+                statistic_id = "psegli:off_peak_usage"
             elif "On-Peak" in series_name:
-                statistic_id = "psegli:on_peak_usage"   # Use proper format like Opower
+                statistic_id = "psegli:on_peak_usage"
             else:
                 continue  # Skip non-peak series
             
-            # Prepare statistics data for HA's API
             statistics = []
             
             # Check if this series has any meaningful data (non-zero values)
             non_zero_points = [point for point in valid_points if point.get("value", 0) > 0]
             if not non_zero_points:
-                _LOGGER.info("Skipping %s - all values are 0, no meaningful data", series_name)
+                _LOGGER.debug("Skipping %s - all values are 0, no meaningful data", series_name)
                 continue
             
             # Get the first timestamp to determine the hour
@@ -544,13 +533,12 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
                 first_dt = local_tz.localize(first_dt)
             
             # Get the last cumulative sum before our first data point to ensure continuity
-            _LOGGER.info("Getting last cumulative sum for %s before %s", series_name, first_dt.strftime("%Y-%m-%d %H:%M"))
+            _LOGGER.debug("Getting last cumulative sum for %s before %s", series_name, first_dt.strftime("%Y-%m-%d %H:%M"))
             cumulative_offset = await get_last_cumulative_kwh(hass, statistic_id, first_dt)
             
-            _LOGGER.info("Starting statistics processing for %s with %d points, continuing from cumulative offset %.6f", 
+            _LOGGER.debug("Starting statistics processing for %s with %d points, continuing from cumulative offset %.6f", 
                          series_name, len(valid_points), cumulative_offset)
             
-            # Track how many points we actually process
             points_processed = 0
             
             try:
@@ -613,7 +601,7 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
                         _LOGGER.error("Error processing point %d (%s): %s", i, point, e)
                         continue
                 
-                _LOGGER.info("Processed %d points for %s", points_processed, series_name)
+                _LOGGER.debug("Processed %d points for %s", points_processed, series_name)
                 
             except Exception as e:
                 _LOGGER.error("Error in enumerate loop for series %s: %s", series_name, e)
@@ -655,9 +643,9 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
                 # Check if result is awaitable
                 if hasattr(result, '__await__'):
                     await result
-                    _LOGGER.info("Successfully updated statistics for %s", statistic_id)
+                    _LOGGER.debug("Successfully updated statistics for %s", statistic_id)
                 else:
-                    _LOGGER.info("Statistics update completed (non-awaitable result) for %s", statistic_id)
+                    _LOGGER.debug("Statistics update completed (non-awaitable result) for %s", statistic_id)
                 
                 # Verify statistics were stored by checking again
                 _LOGGER.debug("Verifying statistics were stored by checking again...")
@@ -694,7 +682,7 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
                         
                         if last_stored:
                             last_sum = last_stored.get("sum", 0.0)
-                            _LOGGER.info("Verification: Statistics confirmed stored for %s, last sum: %.6f", statistic_id, last_sum)
+                            _LOGGER.debug("Verification: Statistics confirmed stored for %s, last sum: %.6f", statistic_id, last_sum)
                         else:
                             _LOGGER.warning("Verification: No sum values found in stored statistics for %s", statistic_id)
                     else:
@@ -714,7 +702,7 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update options for PSEG Long Island."""
     # Don't reload the entire config entry - just update the data
     # This prevents creating multiple scheduled tasks
-    _LOGGER.info("Options updated - no reload needed")
+    _LOGGER.debug("Options updated - no reload needed")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -738,13 +726,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     task = hass.data['global_scheduled_task']
                     if not task.done():
                         task.cancel()
-                        _LOGGER.info("Cancelled global scheduled cookie refresh task")
+                        _LOGGER.debug("Cancelled global scheduled cookie refresh task")
                 except Exception as e:
                     _LOGGER.warning("Error cancelling global scheduled task: %s", e)
                 del hass.data['global_scheduled_task']
             
             del hass.data['global_scheduled_task_running']
-            _LOGGER.info("Cleaned up global scheduled task flag (last instance)")
+            _LOGGER.debug("Cleaned up global scheduled task flag (last instance)")
     
     # Remove the services
     hass.services.async_remove(DOMAIN, "update_statistics")

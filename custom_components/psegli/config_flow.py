@@ -42,7 +42,7 @@ class PSEGLIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
                 # If no cookie provided, try to get one from the addon
                 if not cookie:
-                    _LOGGER.info("No cookie provided, attempting to get fresh cookies from addon...")
+                    _LOGGER.debug("No cookie provided, attempting to get fresh cookies from addon...")
                     try:
                         from .auto_login import get_fresh_cookies
                         cookies = await get_fresh_cookies(username, password)
@@ -50,7 +50,7 @@ class PSEGLIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         if cookies:
                             # Cookies are already in string format from addon
                             cookie_string = cookies
-                            _LOGGER.info("Successfully obtained fresh cookies from addon")
+                            _LOGGER.debug("Successfully obtained fresh cookies from addon")
                         else:
                             _LOGGER.warning("Addon not available or failed to get cookies")
                             # Don't fail here - user can provide cookie manually later
@@ -62,9 +62,9 @@ class PSEGLIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if cookie:
                     client = PSEGLIClient(cookie)
                     await client.test_connection()
-                    _LOGGER.info("Cookie validation successful")
+                    _LOGGER.debug("Cookie validation successful")
                 else:
-                    _LOGGER.info("No cookie available, integration will require manual cookie setup")
+                    _LOGGER.debug("No cookie available, integration will require manual cookie setup")
 
                 # Create the config entry
                 return self.async_create_entry(
@@ -121,7 +121,7 @@ class PSEGLIOptionsFlow(config_entries.OptionsFlow):
                 if new_cookie:
                     client = PSEGLIClient(new_cookie)
                     await client.test_connection()
-                    _LOGGER.info("New cookie validation successful")
+                    _LOGGER.debug("New cookie validation successful")
                     
                     # Update the config entry with the new cookie
                     self.hass.config_entries.async_update_entry(
@@ -140,7 +140,7 @@ class PSEGLIOptionsFlow(config_entries.OptionsFlow):
                 
                 # If no new cookie provided, try to get one from the addon
                 elif username and password:
-                    _LOGGER.info("No new cookie provided, attempting to get fresh cookies from addon...")
+                    _LOGGER.debug("No new cookie provided, attempting to get fresh cookies from addon...")
                     try:
                         from .auto_login import get_fresh_cookies
                         cookies = await get_fresh_cookies(username, password)
@@ -166,7 +166,7 @@ class PSEGLIOptionsFlow(config_entries.OptionsFlow):
                                 {"notification_id": "psegli_auth_failed"},
                             )
                             
-                            _LOGGER.info("Successfully obtained and validated fresh cookies from addon")
+                            _LOGGER.debug("Successfully obtained and validated fresh cookies from addon")
                             return self.async_create_entry(title="", data={})
                         else:
                             errors["base"] = "addon_unavailable"

@@ -56,7 +56,7 @@ class PSEGLIClient:
                 _LOGGER.error("Cookie rejected - redirected to login page")
                 raise InvalidAuth("Cookie rejected - redirected to login page")
             
-            _LOGGER.info("PSEG connection test successful")
+            _LOGGER.debug("PSEG connection test successful")
             return True
         except requests.exceptions.RequestException as err:
             _LOGGER.error("Failed to connect to PSEG: %s", err)
@@ -74,7 +74,6 @@ class PSEGLIClient:
 
     def _get_dashboard_page(self) -> tuple[str, str]:
         """Get the Dashboard page and extract RequestVerificationToken."""
-        _LOGGER.info("Getting RequestVerificationToken from Dashboard page...")
         dashboard_response = self.session.get("https://mysmartenergy.psegliny.com/Dashboard")
         if dashboard_response.status_code != 200:
             raise InvalidAuth("Failed to get Dashboard page")
@@ -111,7 +110,7 @@ class PSEGLIClient:
             "ChartComparison4": "0"
         }
         
-        _LOGGER.info("Making Chart/ setup request with hourly granularity (start: %s, end: %s)", 
+        _LOGGER.debug("Making Chart/ setup request with hourly granularity (start: %s, end: %s)", 
                     start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
         _LOGGER.debug("Chart setup data: %s", chart_setup_data)
         
@@ -138,7 +137,7 @@ class PSEGLIClient:
             "_": int(datetime.now().timestamp() * 1000)  # Cache buster
         }
         
-        _LOGGER.info("Making ChartData/ request to get hourly data")
+        _LOGGER.debug("Making ChartData/ request to get hourly data")
         chart_response = self.session.get(chart_data_url, params=chart_data_params)
         chart_response.raise_for_status()
         
@@ -166,7 +165,7 @@ class PSEGLIClient:
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=days_back)
             
-            _LOGGER.info("Date calculation: days_back=%d, start_date=%s, end_date=%s", 
+            _LOGGER.debug("Date calculation: days_back=%d, start_date=%s, end_date=%s", 
                         days_back, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
             
             # Step 1: Get Dashboard page and extract token

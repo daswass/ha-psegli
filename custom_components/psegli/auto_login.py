@@ -39,7 +39,7 @@ async def check_addon_health() -> bool:
 async def get_fresh_cookies(username: str, password: str) -> Optional[str]:
     """Get fresh cookies using the automation addon."""
     try:
-        logger.info("Requesting fresh cookies from PSEG automation addon...")
+        logger.debug("Requesting fresh cookies from PSEG automation addon...")
         
         # First check if addon is healthy
         if not await check_addon_health():
@@ -54,19 +54,19 @@ async def get_fresh_cookies(username: str, password: str) -> Optional[str]:
                 "password": password
             }
             
-            logger.info("Sending login request to addon with timeout=120s...")
+            logger.debug("Sending login request to addon with timeout=120s...")
             
             async with session.post(
                 "http://localhost:8000/login",
                 json=login_data,
                 timeout=120  # Extended timeout to match addon processing time
             ) as resp:
-                logger.info(f"Addon response received: status={resp.status}")
+                logger.debug(f"Addon response received: status={resp.status}")
                 if resp.status == 200:
                     result = await resp.json()
-                    logger.info(f"Addon response: {result}")
+                    logger.debug(f"Addon response: {result}")
                     if result.get("success") and result.get("cookies"):
-                        logger.info("Successfully obtained cookies from addon")
+                        logger.debug("Successfully obtained cookies from addon")
                         return result["cookies"]
                     else:
                         logger.error(f"Addon login failed: {result.get('error', 'Unknown error')}")
