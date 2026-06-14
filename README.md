@@ -175,6 +175,11 @@ The addon provides these endpoints:
 
 ## 📝 **Changelog**
 
+### **v2.4.7**
+
+- Fix addon communication on Home Assistant OS: discover addon via Supervisor instead of `localhost:8000`
+- Increase login/MFA timeout to 300s for long Playwright flows
+
 ### **v2.4.6**
 
 - Fix Options flow for Home Assistant 2025.12+ (`config_entry` is now read-only on OptionsFlow)
