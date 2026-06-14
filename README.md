@@ -175,6 +175,10 @@ The addon provides these endpoints:
 
 ## 📝 **Changelog**
 
+### **v2.4.6**
+
+- Fix Options flow for Home Assistant 2025.12+ (`config_entry` is now read-only on OptionsFlow)
+
 ### **v2.4.5**
 
 - Allow integration setup to complete when MFA required (call enter_mfa_code with code)
