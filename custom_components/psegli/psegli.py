@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional, List
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -50,9 +51,9 @@ class PSEGLIClient:
         try:
             response = self.session.get("https://mysmartenergy.psegliny.com/Dashboard")
             response.raise_for_status()
-            
+
             # Check if we're redirected to login page
-            if "login" in response.url.lower() or "signin" in response.url.lower():
+            if self._is_logged_out(response):
                 _LOGGER.error("Cookie rejected - redirected to login page")
                 raise InvalidAuth("Cookie rejected - redirected to login page")
             
@@ -61,6 +62,27 @@ class PSEGLIClient:
         except requests.exceptions.RequestException as err:
             _LOGGER.error("Failed to connect to PSEG: %s", err)
             raise InvalidAuth("Invalid authentication") from err
+
+    @staticmethod
+    def _is_logged_out(response: requests.Response) -> bool:
+        """Return True if MyMeter answered with its login page instead of the dashboard.
+
+        Because of the X-Requested-With header, MyMeter answers an expired session with
+        HTTP 200 and an AJAX redirect ({"AjaxResults":[{"Action":"Redirect","Value":"/"}]})
+        instead of an HTTP redirect. Without that header it redirects to the site root,
+        which shows the login form.
+        """
+        if "login" in response.url.lower() or "signin" in response.url.lower():
+            return True
+        if not urlparse(response.url).path.startswith("/Dashboard"):
+            return True
+        if "text/html" not in response.headers.get("Content-Type", ""):
+            try:
+                results = json.loads(response.text).get("AjaxResults") or []
+            except (ValueError, AttributeError):
+                return True
+            return any(result.get("Action") == "Redirect" for result in results)
+        return 'name="LoginEmail"' in response.text
 
     async def test_connection(self) -> bool:
         """Test the connection to PSEG (async wrapper)."""
