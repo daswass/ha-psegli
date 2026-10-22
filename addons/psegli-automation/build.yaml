@@ -1,6 +1,6 @@
 ---
 name: "psegli-automation"
-version: "2.4.5"
+version: "2.4.8"
 build_from: python:3.11-slim
 labels:
   io.hass.type: addon
