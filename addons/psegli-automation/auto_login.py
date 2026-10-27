@@ -352,45 +352,48 @@ class PSEGAutoLogin:
                 if is_mfa_page:
                     _LOGGER.info("🔐 MFA/verification challenge detected")
                     
-                    # Select delivery method (SMS vs Email) if user prefers SMS
-                    if self.mfa_method == "sms":
-                        # First try "Use a different method" - may reveal SMS option
+                    # Select the requested delivery factor before sending a code.
+                    # The provider often defaults to email, so skipping this for one
+                    # method makes delivery depend on whichever factor Okta last used.
+                    if self.mfa_method in {"sms", "email"}:
+                        # "Use a different method" may reveal the requested factor.
                         diff_method = None
                         for diff_sel in ['a:has-text("Use a different method")', 'a:has-text("Try another way")', 'a:has-text("Choose a different")']:
                             diff_method = await self.page.query_selector(diff_sel)
                             if diff_method:
                                 break
                         if diff_method:
-                            _LOGGER.info("📱 Expanding auth options...")
+                            _LOGGER.info("🔐 Expanding MFA delivery options...")
                             await diff_method.click()
                             await asyncio.sleep(2.0)
                         
-                        # Try multiple selectors for SMS/Text/Phone
-                        sms_selectors = [
-                            ('a:has-text("SMS")', True),
-                            ('a:has-text("Text")', True),
-                            ('button:has-text("SMS")', True),
-                            ('button:has-text("Text")', True),
-                            ('a:has-text("Send code via SMS")', True),
-                            ('a:has-text("Text me")', True),
-                            ('a:has-text("phone")', True),
-                            ('button:has-text("phone")', True),
-                            ('[data-se="sms"]', True),
-                            ('[data-se="phone"]', True),
-                        ]
-                        sms_clicked = False
-                        for sel, _ in sms_selectors:
+                        delivery_selectors = {
+                            "sms": [
+                                'a:has-text("SMS")', 'a:has-text("Text")',
+                                'button:has-text("SMS")', 'button:has-text("Text")',
+                                'a:has-text("Send code via SMS")', 'a:has-text("Text me")',
+                                'a:has-text("phone")', 'button:has-text("phone")',
+                                '[data-se="sms"]', '[data-se="phone"]',
+                            ],
+                            "email": [
+                                'a:has-text("Email")', 'button:has-text("Email")',
+                                'a:has-text("Email me")', 'button:has-text("Email me")',
+                                'a:has-text("Send code via email")',
+                                'button:has-text("Send code via email")',
+                                '[data-se="email"]', '[data-se="email-authenticator"]',
+                            ],
+                        }
+                        method_clicked = False
+                        for sel in delivery_selectors[self.mfa_method]:
                             el = await self.page.query_selector(sel)
                             if el:
-                                el_text = (await el.text_content() or "").lower()
-                                if "sms" in el_text or "text" in el_text or "phone" in el_text or not el_text:
-                                    _LOGGER.info("📱 Selecting SMS/Text option")
-                                    await el.click()
-                                    await asyncio.sleep(2.0)
-                                    sms_clicked = True
-                                    break
-                        if not sms_clicked:
-                            _LOGGER.warning("⚠️ SMS option not found - saving page to mfa_page_debug.html for debug")
+                                _LOGGER.info("📨 Selecting %s MFA delivery", self.mfa_method)
+                                await el.click()
+                                await asyncio.sleep(2.0)
+                                method_clicked = True
+                                break
+                        if not method_clicked:
+                            _LOGGER.warning("⚠️ %s MFA option not found - saving page to mfa_page_debug.html for debug", self.mfa_method)
                             try:
                                 debug_content = await self.page.content()
                                 with open("mfa_page_debug.html", "w", encoding="utf-8") as f:
@@ -399,20 +402,27 @@ class PSEGAutoLogin:
                                 pass
                     
                     # Click "Send code" / "Receive code" - required to trigger the verification code
-                    send_selectors = [
-                        'button:has-text("Receive a code via SMS")',
-                        'input[value="Receive a code via SMS"]',
-                        'a:has-text("Receive a code via SMS")',
-                        'button:has-text("Send code via SMS")',
+                    send_selectors = (
+                        [
+                            'button:has-text("Receive a code via email")',
+                            'input[value="Receive a code via email"]',
+                            'a:has-text("Receive a code via email")',
+                            'button:has-text("Email me a code")',
+                            'input[value="Email me a code"]',
+                        ] if self.mfa_method == "email" else [
+                            'button:has-text("Receive a code via SMS")',
+                            'input[value="Receive a code via SMS"]',
+                            'a:has-text("Receive a code via SMS")',
+                            'button:has-text("Send code via SMS")',
+                            'button:has-text("Text me a code")',
+                            'input[value="Text me a code"]',
+                        ]
+                    ) + [
                         'button:has-text("Send Code")',
                         'input[value="Send Code"]',
                         'input[value="Send code"]',
                         'button:has-text("Send code")',
                         'a:has-text("Send Code")',
-                        'input[value="Email me a code"]',
-                        'button:has-text("Email me a code")',
-                        'input[value="Text me a code"]',
-                        'button:has-text("Text me a code")',
                     ]
                     # Wait for the send/receive button to appear (page may load after SMS option click)
                     send_code_btn = None
