@@ -387,7 +387,8 @@ class PSEGAutoLogin:
                         for sel in delivery_selectors[self.mfa_method]:
                             el = await self.page.query_selector(sel)
                             if el:
-                                _LOGGER.info("📨 Selecting %s MFA delivery", self.mfa_method)
+                                label = (await el.text_content() or "").strip()
+                                _LOGGER.info("📨 Selecting %s MFA delivery via %r", self.mfa_method, label[:120])
                                 await el.click()
                                 await asyncio.sleep(2.0)
                                 method_clicked = True
@@ -438,6 +439,13 @@ class PSEGAutoLogin:
                         _LOGGER.info("📤 Clicking to trigger verification code...")
                         await send_code_btn.click()
                         await asyncio.sleep(3.0)
+                    else:
+                        # Preserve enough rendered UI state in the add-on log to
+                        # diagnose provider wording changes without exposing page HTML.
+                        labels = await self.page.locator("button, a, input[type=submit], input[type=button]").evaluate_all(
+                            "els => els.map(el => (el.innerText || el.value || el.getAttribute('aria-label') || '').trim()).filter(Boolean).slice(0, 30)"
+                        )
+                        _LOGGER.warning("⚠️ No %s code-send control found; visible controls: %s", self.mfa_method, labels)
                     
                     if self.mfa_code:
                         # Try to enter the MFA code
