@@ -410,6 +410,8 @@ class PSEGAutoLogin:
                             'a:has-text("Receive a code via email")',
                             'button:has-text("Email me a code")',
                             'input[value="Email me a code"]',
+                            'button:has-text("Send me an email")',
+                            'input[value="Send me an email"]',
                         ] if self.mfa_method == "email" else [
                             'button:has-text("Receive a code via SMS")',
                             'input[value="Receive a code via SMS"]',
