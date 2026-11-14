@@ -20,7 +20,8 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, CONF_COOKIE, CONF_MFA_METHOD
-from .psegli import InvalidAuth, PSEGLIClient
+from .exceptions import InvalidAuth, PSEGConnectionError
+from .psegli import PSEGLIClient
 from .auto_login import get_fresh_cookies, complete_mfa_login, check_addon_health, MFA_REQUIRED
 
 _LOGGER = logging.getLogger(__name__)
@@ -117,6 +118,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not username or not password:
         _LOGGER.error("No username/password provided")
         return False
+
+    # Validate a stored cookie before deciding whether a login is needed. PSEG
+    # can return an HTTP-200 expired-session page, so PSEGLIClient also checks
+    # for the Dashboard anti-forgery token. Clearing an invalid cookie routes
+    # setup through the existing add-on login/MFA flow instead of aborting the
+    # config entry before its refresh services are registered.
+    if cookie:
+        try:
+            await PSEGLIClient(cookie).test_connection()
+        except PSEGConnectionError as err:
+            _LOGGER.warning(
+                "Unable to validate stored PSEG cookie during setup; "
+                "preserving it for a scheduled retry: %s",
+                err,
+            )
+        except InvalidAuth as err:
+            _LOGGER.warning("Stored PSEG cookie is invalid; requesting a fresh cookie: %s", err)
+            cookie = ""
     
     # If no cookie available, try to get one from the addon
     mfa_pending = False
@@ -239,6 +258,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register the cookie refresh service
     async def async_refresh_cookie(call: Any) -> None:
         """Manually refresh the PSEG authentication cookie."""
+        nonlocal mfa_pending
+        # A manual refresh intentionally replaces any abandoned MFA session.
+        mfa_pending = False
         _LOGGER.debug("Cookie refresh service called")
         
         try:
@@ -261,6 +283,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             cookies = await get_fresh_cookies(username, password, mfa_method=mfa_method)
             
             if cookies == MFA_REQUIRED:
+                mfa_pending = True
                 channel = "phone" if mfa_method == "sms" else "email"
                 _LOGGER.warning("PSEG requires MFA - check %s for code, then call enter_mfa_code service", channel)
                 await hass.async_create_task(
@@ -275,6 +298,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                 )
             elif cookies:
+                mfa_pending = False
                 # Cookies are already in string format from addon
                 cookie_string = cookies
                 
@@ -365,6 +389,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     async def async_enter_mfa_code(call: Any) -> None:
         """Complete MFA by entering the verification code from email or SMS."""
+        nonlocal mfa_pending
         code = call.data.get("code", "").strip()
         if not code:
             _LOGGER.error("No MFA code provided")
@@ -374,6 +399,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
         cookies = await complete_mfa_login(code)
         if cookies:
+            mfa_pending = False
             hass.config_entries.async_update_entry(
                 entry,
                 data={**entry.data, CONF_COOKIE: cookies},
@@ -427,12 +453,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_enter_mfa_code
     )
     
-    # Set up scheduled cookie refresh at XX:00 and XX:30
-    async def async_scheduled_cookie_refresh() -> None:
-        """Automatically refresh cookies at scheduled times (XX:00 and XX:30).
-        Only refreshes when the current cookie is invalid - avoids MFA on every run.
-        """
+    # Keep the short-lived PSEG session active every five minutes. Statistics
+    # still import only at XX:00 and XX:30.
+    async def async_scheduled_cookie_refresh(update_statistics: bool) -> None:
+        """Keep the cookie active and refresh it only when invalid."""
+        nonlocal mfa_pending
         _LOGGER.debug("Scheduled cookie refresh triggered")
+
+        if mfa_pending:
+            _LOGGER.debug("MFA already pending; skipping automatic login retry")
+            return
         
         try:
             username = entry.data.get(CONF_USERNAME)
@@ -449,12 +479,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 try:
                     await current_client.test_connection()
                     _LOGGER.debug("Cookie still valid, skipping cookie refresh (no MFA needed)")
-                    # Still update statistics - energy data may have new readings
-                    try:
-                        await async_update_statistics_manual(type("Call", (), {"data": {"days_back": 0}})())
-                        _LOGGER.debug("Statistics updated (cookie still valid)")
-                    except Exception as stats_err:
-                        _LOGGER.warning("Statistics update failed: %s", stats_err)
+                    if update_statistics:
+                        try:
+                            await async_update_statistics_manual(type("Call", (), {"data": {"days_back": 0}})())
+                            _LOGGER.debug("Statistics updated (cookie still valid)")
+                        except Exception as stats_err:
+                            _LOGGER.warning("Statistics update failed: %s", stats_err)
+                    return
+                except PSEGConnectionError as err:
+                    _LOGGER.warning(
+                        "PSEG connection check failed; preserving the cookie and "
+                        "retrying at the next scheduled check: %s",
+                        err,
+                    )
                     return
                 except InvalidAuth:
                     _LOGGER.debug("Cookie expired, proceeding with refresh")
@@ -469,6 +506,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             cookies = await get_fresh_cookies(username, password, mfa_method=mfa_method)
             
             if cookies == MFA_REQUIRED:
+                mfa_pending = True
                 channel = "phone" if mfa_method == "sms" else "email"
                 _LOGGER.warning("PSEG requires MFA - check %s, then call enter_mfa_code service", channel)
                 await hass.async_create_task(
@@ -483,6 +521,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                 )
             elif cookies:
+                mfa_pending = False
                 # Cookies are already in string format from addon
                 cookie_string = cookies
                 current_client = hass.data[DOMAIN][entry.entry_id]
@@ -525,17 +564,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as e:
             _LOGGER.error("Failed to refresh cookie during scheduled refresh: %s", e)
     
-    # Use standard Home Assistant approach: refresh cookies at XX:00 and XX:30
+    # A five-minute request keeps PSEG's short-lived application session alive.
     async def refresh_cookies_scheduled():
-        """Refresh cookies at scheduled times (XX:00 and XX:30)."""
+        """Keep the cookie alive every five minutes and import twice hourly."""
         while True:
             now = datetime.now()
-            
-            if now.minute < 30:
-                next_refresh = now.replace(minute=30, second=0, microsecond=0)
-            else:
-                # Next refresh at XX:00 (next hour)
+
+            next_minute = ((now.minute // 5) + 1) * 5
+            if next_minute >= 60:
                 next_refresh = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            else:
+                next_refresh = now.replace(minute=next_minute, second=0, microsecond=0)
             
             wait_seconds = (next_refresh - now).total_seconds()
             _LOGGER.debug("Next scheduled cookie refresh at %s (in %.0f seconds)", 
@@ -543,7 +582,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             
             await asyncio.sleep(wait_seconds)
             
-            await async_scheduled_cookie_refresh()
+            await async_scheduled_cookie_refresh(
+                update_statistics=next_refresh.minute in (0, 30)
+            )
     
     # Start the scheduled cookie refresh task AFTER all services are registered
     # Use a global flag that persists across reloads to prevent multiple tasks
@@ -876,4 +917,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "refresh_cookie")
     hass.services.async_remove(DOMAIN, "enter_mfa_code")
     
-    return True 
+    return True

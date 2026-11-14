@@ -8,4 +8,8 @@ class InvalidAuth(HomeAssistantError):
 
 
 class PSEGLIError(HomeAssistantError):
-    """Base exception for PSEG Long Island integration.""" 
+    """Base exception for PSEG Long Island integration."""
+
+
+class PSEGConnectionError(PSEGLIError):
+    """Error to indicate PSEG could not be reached."""
