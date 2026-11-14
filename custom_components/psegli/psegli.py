@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .const import ATTR_COMPARISON, ATTR_DESCRIPTION, ATTR_LAST_UPDATE
-from .exceptions import InvalidAuth
+from .exceptions import InvalidAuth, PSEGConnectionError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,8 +23,8 @@ class PSEGLIClient:
         """Initialize the client."""
         self.cookie = cookie
         self.session = requests.Session()
+        self._set_session_cookies(cookie)
         self.session.headers.update({
-            "Cookie": cookie,
             "Referer": "https://mysmartenergy.psegliny.com/Dashboard",
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -40,10 +40,24 @@ class PSEGLIClient:
             "Sec-Gpc": "1"
         })
 
+    def _set_session_cookies(self, cookie: str) -> None:
+        """Seed the session jar so server cookie rotations are retained."""
+        self.session.cookies.clear()
+        for item in cookie.split(";"):
+            name, separator, value = item.strip().partition("=")
+            if not separator or not name:
+                continue
+            self.session.cookies.set(
+                name,
+                value,
+                domain="mysmartenergy.psegliny.com",
+                path="/",
+            )
+
     def update_cookie(self, new_cookie: str) -> None:
         """Update the cookie in this client instance."""
         self.cookie = new_cookie
-        self.session.headers.update({"Cookie": new_cookie})
+        self._set_session_cookies(new_cookie)
         _LOGGER.debug("Updated client cookie to: %s", new_cookie[:50] + "..." if len(new_cookie) > 50 else new_cookie)
 
     def _test_connection_sync(self) -> bool:
@@ -56,12 +70,24 @@ class PSEGLIClient:
             if self._is_logged_out(response):
                 _LOGGER.error("Cookie rejected - redirected to login page")
                 raise InvalidAuth("Cookie rejected - redirected to login page")
+
+            # PSEG can return an HTTP-200 expired-session page without changing
+            # the URL. A usable Dashboard must contain the anti-forgery token
+            # consumed by the statistics requests.
+            token = BeautifulSoup(response.text, "html.parser").find(
+                "input", attrs={"name": "__RequestVerificationToken"}
+            )
+            if token is None or not token.get("value"):
+                _LOGGER.error("Cookie rejected - Dashboard verification token missing")
+                raise InvalidAuth("Cookie rejected - Dashboard verification token missing")
             
             _LOGGER.debug("PSEG connection test successful")
             return True
         except requests.exceptions.RequestException as err:
-            _LOGGER.error("Failed to connect to PSEG: %s", err)
-            raise InvalidAuth("Invalid authentication") from err
+            _LOGGER.warning(
+                "Unable to reach PSEG; preserving the existing session: %s", err
+            )
+            raise PSEGConnectionError("Unable to reach PSEG") from err
 
     @staticmethod
     def _is_logged_out(response: requests.Response) -> bool:
@@ -307,6 +333,4 @@ class PSEGLIClient:
                         "valid_points": valid_points  # Include the actual data points
                     }
 
-        return result 
-
- 
+        return result
