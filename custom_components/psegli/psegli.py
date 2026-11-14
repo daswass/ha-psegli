@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 
 from .const import ATTR_COMPARISON, ATTR_DESCRIPTION, ATTR_LAST_UPDATE
 from .exceptions import InvalidAuth
+from .statistics import portal_timestamp
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -124,8 +125,8 @@ class PSEGLIClient:
             "Start": start_date.strftime("%Y-%m-%d"),
             "End": end_date.strftime("%Y-%m-%d"),
             "IsRangeOpen": "False",
-            "MaintainMaxDate": "true",
-            "SelectedViaDateRange": "False",
+            "MaintainMaxDate": "false",
+            "SelectedViaDateRange": "True",
             "ChartComparison": "1",
             "ChartComparison2": "0",
             "ChartComparison3": "0",
@@ -177,16 +178,13 @@ class PSEGLIClient:
             # First check if our cookie is still valid
             self._test_connection_sync()
             
-            # Calculate date range based on days_back parameter
-            if days_back == 0:
-                # Yesterday to today (accounting for data lag)
+            # Explicit windows prevent PSEG silently truncating large requests.
+            if start_date is None and end_date is None:
                 end_date = datetime.now()
-                start_date = end_date - timedelta(days=1)
-            else:
-                # days_back days ago to now
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=days_back)
-            
+                start_date = end_date - timedelta(days=days_back or 1)
+            elif start_date is None or end_date is None:
+                raise ValueError("Both start_date and end_date are required")
+
             _LOGGER.debug("Date calculation: days_back=%d, start_date=%s, end_date=%s", 
                         days_back, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
             
@@ -275,10 +273,9 @@ class PSEGLIClient:
                         # Replace None values with 0 to ensure continuous data flow
                         if value is None:
                             value = 0
-                        # Timestamps need to be shifted by +4 hours to align with actual peak hours
-                        # Raw timestamp shows 11:00 AM but should be 3:00 PM for peak hours
-                        shifted_timestamp = timestamp + (4 * 3600)  # Add 4 hours
-                        local_time = datetime.fromtimestamp(shifted_timestamp)
+                        # Chart timestamps encode New York wall-clock labels.
+                        # Use the local UTC offset for this date, including winter.
+                        local_time = portal_timestamp(point["x"])
                         valid_points.append({
                             "timestamp": local_time,
                             "value": value
@@ -307,6 +304,4 @@ class PSEGLIClient:
                         "valid_points": valid_points  # Include the actual data points
                     }
 
-        return result 
-
- 
+        return result

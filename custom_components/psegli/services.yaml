@@ -13,6 +13,14 @@ update_statistics:
           max: 365
           step: 1
 
+    exports_only:
+      name: "Exports Only"
+      description: "Backfill export history without rewriting existing import statistics."
+      required: false
+      default: false
+      selector:
+        boolean: {}
+
 refresh_cookie:
   name: "Refresh PSEG Cookie"
   description: "Manually refresh the PSEG authentication cookie using the addon"
