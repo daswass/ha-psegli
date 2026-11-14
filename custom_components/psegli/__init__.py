@@ -8,6 +8,10 @@ from typing import Any
 
 import pytz
 
+try:
+    from homeassistant.components.recorder.models import StatisticMeanType
+except ImportError:  # Home Assistant before the recorder metadata migration.
+    StatisticMeanType = None
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
@@ -763,6 +767,9 @@ async def _process_chart_data(hass: HomeAssistant, chart_data: dict[str, Any]) -
                     "has_sum": True,  # Set to True since we're sending cumulative totals
                     "name": f"PSEG {series_name}",
                 }
+                if StatisticMeanType is not None:
+                    metadata.pop("has_mean")
+                    metadata.update(mean_type=StatisticMeanType.NONE, unit_class="energy")
                 
                 _LOGGER.debug("Using metadata: %s", metadata)
                 
@@ -876,4 +883,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "refresh_cookie")
     hass.services.async_remove(DOMAIN, "enter_mfa_code")
     
-    return True 
+    return True
